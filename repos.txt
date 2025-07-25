@@ -1,0 +1,8 @@
+nomulus
+druid
+nacos
+dubbo
+spring-boot
+fastjson
+rocketmq
+curator
