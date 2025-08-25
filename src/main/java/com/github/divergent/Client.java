@@ -11,6 +11,8 @@ import com.google.common.io.Files;
 import org.apache.commons.io.FileUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+
+import java.util.ArrayList;
 import java.util.Properties;
 import java.awt.*;
 import java.io.*;
@@ -29,7 +31,7 @@ public class Client {
     private static final File output;
     private static File timeLog, groups;
     private static final boolean debug = false;
-
+    private static boolean groundTruth=false;
     static {
         try (InputStream in = Client.class.getClassLoader()
                 .getResourceAsStream("config.properties")) {
@@ -42,7 +44,7 @@ public class Client {
             projects = new File(prop.getProperty("projects.path"));
             dataset  = new File(prop.getProperty("dataset.path"));
             output   = new File(prop.getProperty("output.path"));
-
+            groundTruth=prop.getProperty("groundtruth").equals("true");
             // 可选：确保目录存在
             if (!projects.exists())  projects.mkdirs();
             if (!dataset.exists())   dataset.mkdirs();
@@ -106,7 +108,6 @@ public class Client {
 
         byte[] bytes = FileUtils.readFileToByteArray(new File(dataset, jsonFile));
         JSONArray input = JSON.parseArray(bytes);
-        JSONArray output = new JSONArray();
 
         long sum = 0;
         int size = input.size(), failCount = 0;
@@ -114,46 +115,73 @@ public class Client {
 
         for (int i = 0; i < size; i++) {
             List<String> commits = input.getJSONArray(i).toList(String.class);
-            String hash1 = commits.get(0), hash2 = commits.get(commits.size() - 1);
 
             StopWatch stopWatch = StopWatch.getInstance();
             stopWatch.mark("analyze");
-            Diff diff = new Diff(repo, temp, hash1, hash2, true);
-            Cluster cluster = new Cluster(diff);
-            cluster.compute();
-            if (cluster.isFailed()) {
+            Diff diff;
+            if(groundTruth){
+                int commit_number=commits.size();
+                List<List<Patch>>res=new ArrayList<>();
+                for(int j=0;j<commit_number-1;j++){
+                    List<Patch>allPatch=new ArrayList<>();
+                   String hash1=commits.get(j);
+                   String hash2=commits.get(j+1);
+                   diff=new Diff(repo, temp, hash1, hash2, true);
+                    for(Patch p:diff.getPatchList()){
+                        allPatch.add(p);
+                    }
+                    res.add(allPatch);
+                    diff.cleanUp();
+                }
                 try (FileWriter fw = new FileWriter(outFile, true)) { // append 模式
                     if (!first) {
                         fw.write(",\n");
                     }
-                    JSONObject obj = toJSONObject(cluster.getResult(), i);
+                    JSONObject obj = toJSONObject(res, i);
                     String jsonText = JSON.toJSONString(obj, PrettyFormat, WriteNulls);
                     fw.write(jsonText);
                 }
-                logger.error("Case {} has errors and will be skipped", i + 1);
-                failCount++;
-            } else {
-                long cost = stopWatch.finish("analyze");
-                sum += cost;
-                String timeRep = String.format("Case %d/%d: run cost %dms, refactor cost %dms",
-                        i, size - 1, cost, stopWatch.getTime("refactor"));
-                logger.info(timeRep);
-                FileUtils.writeLines(log, List.of(timeRep), true);
-//                output.add(toJSONObject(cluster.getResult(), i));
-                JSONObject obj = toJSONObject(cluster.getResult(), i);
-                String jsonText = JSON.toJSONString(obj, PrettyFormat, WriteNulls);
-                try (FileWriter fw = new FileWriter(outFile, true)) { // append 模式
-                    if (!first) {
-                        fw.write(",\n");
+            }else{
+                String hash1 = commits.get(0), hash2 = commits.get(commits.size() - 1);
+                diff = new Diff(repo, temp, hash1, hash2, true);
+                Cluster cluster = new Cluster(diff);
+                cluster.compute();
+                if (cluster.isFailed()) {
+                    try (FileWriter fw = new FileWriter(outFile, true)) { // append 模式
+                        if (!first) {
+                            fw.write(",\n");
+                        }
+                        JSONObject obj = toJSONObject(cluster.getResult(), i);
+                        String jsonText = JSON.toJSONString(obj, PrettyFormat, WriteNulls);
+                        fw.write(jsonText);
                     }
-                    fw.write(jsonText);
+                    logger.error("Case {} has errors and will be skipped", i + 1);
+                    failCount++;
+                } else {
+                    long cost = stopWatch.finish("analyze");
+                    sum += cost;
+                    String timeRep = String.format("Case %d/%d: run cost %dms, refactor cost %dms",
+                            i, size - 1, cost, stopWatch.getTime("refactor"));
+                    logger.info(timeRep);
+                    FileUtils.writeLines(log, List.of(timeRep), true);
+//                output.add(toJSONObject(cluster.getResult(), i));
+                    JSONObject obj = toJSONObject(cluster.getResult(), i);
+                    String jsonText = JSON.toJSONString(obj, PrettyFormat, WriteNulls);
+                    try (FileWriter fw = new FileWriter(outFile, true)) { // append 模式
+                        if (!first) {
+                            fw.write(",\n");
+                        }
+                        fw.write(jsonText);
+                    }
+                    first = false;
                 }
-                first = false;
+                cluster.cleanUp();
+                diff.cleanUp();
             }
-            diff.cleanUp();
+
             stopWatch.reset();
             JavaParserFacade.clearInstances();
-            cluster.cleanUp();
+
             if (debug) {
                 break;
             }
